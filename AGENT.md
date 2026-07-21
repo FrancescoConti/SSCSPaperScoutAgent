@@ -123,10 +123,26 @@ python3 scripts/build_ods.py \
 ```
 
 This drops papers scoring below the threshold (the "poorly related or unrelated"
-ones) and any that are still unscored, then writes `results.ods` sorted best-first
-with columns: **Paper ID | Title | Authors | Link | Score | Reason | Year | Venue**.
-The Link cells are real clickable hyperlinks (open-access PDF if available, otherwise
-a resolvable DOI to IEEE Xplore).
+ones) and any that are still unscored, then writes `results.ods` with three sheets,
+built for topic statistics:
+
+- **Papers** — one tidy row per kept paper, sorted best-first, with analysis-friendly
+  typed columns: `Topic | Paper ID | Title | Authors | Year | Venue | Score |
+  Relevance | Direct | Reason | Link`. `Topic` is the keyword (so several
+  single-topic exports can be stacked into one dataset for cross-topic stats), `Year`
+  is numeric, `Score` is a float, `Relevance` is a band (Direct / Strong / Moderate /
+  Weak), and `Direct` is `1` for a direct (=1.0) match else `0`. Link cells are real
+  clickable hyperlinks (open-access PDF if available, otherwise a DOI resolving to
+  IEEE Xplore).
+- **Summary** — a per-year cross-tab: `Fetched | Matched | Direct | Strong | Moderate
+  | Weak | Avg score | Matched share`, plus a TOTAL row. In `--all` mode "Matched
+  share" is the fraction of the whole program that dealt with the topic — the headline
+  statistic. Counts here include dropped papers in the "Fetched" denominator.
+- **Meta** — the run parameters (topic, venue, years, mode, query, threshold, totals,
+  timestamp), so the export is self-describing.
+
+The Papers sheet is deliberately pivot-ready; the Summary sheet is a static snapshot.
+No charts are generated.
 
 ### 5. Report
 

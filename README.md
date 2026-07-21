@@ -13,9 +13,19 @@ Each surviving paper gets a **score in `[0, 1]`**:
   judged genuinely related, graded by how strongly.
 - Papers below the threshold (default `0.3`) are **removed** from the spreadsheet.
 
-Spreadsheet columns: **Paper ID · Title · Authors · Link · Score · Reason · Year ·
-Venue**. Links are clickable (open-access PDF where available, otherwise a DOI that
-resolves to IEEE Xplore).
+The workbook is organized for **topic statistics** (no charts — that's out of scope):
+
+- **`Papers`** — one tidy, pivot-ready row per kept paper: `Topic · Paper ID · Title ·
+  Authors · Year · Venue · Score · Relevance · Direct · Reason · Link`. `Topic` is the
+  keyword (stack several single-topic exports into one dataset for cross-topic stats),
+  `Year` is numeric, `Score` a float, `Relevance` a band (Direct/Strong/Moderate/Weak),
+  and `Direct` a 1/0 flag that sums to a direct-match count. Links are clickable
+  (open-access PDF where available, otherwise a DOI resolving to IEEE Xplore).
+- **`Summary`** — a per-year cross-tab (`Fetched · Matched · Direct · Strong ·
+  Moderate · Weak · Avg score · Matched share`) with a TOTAL row. In `--all` mode
+  "Matched share" is the fraction of the whole conference program that dealt with the
+  topic.
+- **`Meta`** — the run parameters, so each export is self-describing.
 
 ## How it works
 
