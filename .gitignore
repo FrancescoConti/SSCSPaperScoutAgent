@@ -1,0 +1,13 @@
+# Secrets
+.env
+
+# Generated pipeline artifacts
+*.ods
+candidates*.json
+!scripts/venues.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/

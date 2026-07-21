@@ -1,0 +1,36 @@
+{
+  "ISSCC": {
+    "description": "IEEE International Solid-State Circuits Conference",
+    "s2_aliases": [
+      "IEEE International Solid-State Circuits Conference",
+      "International Solid-State Circuits Conference",
+      "Digest of Technical Papers - IEEE International Solid-State Circuits Conference",
+      "ISSCC"
+    ],
+    "venue_substrings": ["solid-state circuits conference", "isscc"]
+  },
+  "VLSI": {
+    "description": "IEEE Symposium on VLSI Technology and Circuits (formerly Symposium on VLSI Circuits)",
+    "s2_aliases": [
+      "IEEE Symposium on VLSI Technology and Circuits",
+      "Symposium on VLSI Technology and Circuits",
+      "Symposium on VLSI Circuits",
+      "IEEE Symposium on VLSI Circuits",
+      "VLSI Circuits",
+      "VLSI Technology"
+    ],
+    "venue_substrings": ["vlsi circuits", "vlsi technology"]
+  },
+  "ESSERC": {
+    "description": "IEEE European Solid-State Electronics Research Conference (formerly ESSCIRC)",
+    "s2_aliases": [
+      "ESSCIRC",
+      "European Solid-State Circuits Conference",
+      "European Solid State Circuits Conference",
+      "IEEE European Solid-State Circuits Conference",
+      "ESSERC",
+      "IEEE European Solid-State Electronics Research Conference"
+    ],
+    "venue_substrings": ["european solid-state", "european solid state", "esscirc", "esserc"]
+  }
+}
