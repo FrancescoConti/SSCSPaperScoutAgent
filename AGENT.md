@@ -5,7 +5,7 @@ You are **paper-scout**. Your job: given a **conference**, a **set of years**, a
 the theme, judge how relevant each one is, and produce an **ODS spreadsheet** of the
 relevant papers with a relevance **score**.
 
-You drive two deterministic Python scripts (they do the API calls and file I/O) and
+You drive three deterministic Python scripts (they do the API calls and file I/O) and
 you personally supply the one thing a script can't: **judgment** about how related
 each paper is to the theme.
 
@@ -14,7 +14,8 @@ each paper is to the theme.
 - **keyword / theme** — e.g. `LLM`, `compute-in-memory`, `PLL jitter`. (required)
 - **conference** — `ISSCC` (default), `VLSI`, or `ESSERC`. (default ISSCC)
 - **years** — a single year `2024` or a range `2021-2024`. (required)
-- **threshold** — minimum score to keep a paper. Default `0.3`. (optional)
+- **threshold** — minimum score to keep a paper. Default `0.3`. (optional; it only
+  seeds the editable cell in the spreadsheet, so it is never worth asking about)
 
 If the user gave a keyword and years, don't ask anything else — use the defaults.
 
@@ -79,6 +80,56 @@ for you to fill. `meta.mode` records which mode was used.
 If a run returns suspiciously few papers, the venue filter may be too strict — retry
 with `--no-venue-filter`, or (recall mode) widen `--query`.
 
+### 2b. Cross-check coverage against other sources — ALWAYS DO THIS IN `--all` MODE
+
+Semantic Scholar's venue metadata for these conferences is patchy: whole years can be
+indexed under an alternate venue string, and some papers carry no venue at all. A
+statistic like "*x*% of ISSCC dealt with topic Y" is only as trustworthy as the
+denominator, so verify the denominator against indexes that list the **program**
+rather than the citation graph:
+
+```bash
+python3 scripts/crosscheck_sources.py \
+  --venue ISSCC --years 2021-2024 \
+  --in candidates.json --out crosscheck.json --merge
+```
+
+Sources, all queried independently, all optional, none fatal if unreachable:
+
+| source | default | key needed | notes |
+|--------|---------|-----------|-------|
+| `dblp` | yes | no | the most reliable conference-program index — trust it most |
+| `crossref` | yes | no | DOI registry; sees whatever IEEE deposited |
+| `ieee` | no | `IEEE_XPLORE_API_KEY` | authoritative, but institutional |
+| `openalex` | no | no | **under-reports these venues** — many ISSCC works exist in OpenAlex with no venue attached at all, so enumerating by venue misses them. Opt in only for venues it indexes properly. |
+
+Default is `--sources dblp,crossref`. Matching is by DOI, then normalized title, then
+a token-overlap fallback. Proceedings front matter (session overviews, indexes,
+committee pages) is filtered out, so it never inflates the denominator.
+
+`crosscheck.json` reports, per source: how many papers it found, how many of those
+Semantic Scholar also had (`coverage`), and the full list of papers it found that S2
+**missed**. With `--merge`, those missing papers are appended to `candidates.json`
+with `score: null` so they flow into your scoring step like any other candidate, and
+`meta.crosschecked_sources` records which sources were consulted (this surfaces on
+the spreadsheet's Meta sheet).
+
+Read the report and act on it:
+
+- **Coverage ≥ ~95% everywhere** — S2 was essentially complete; say so in your report.
+- **A source finds many papers S2 lacks** — the merged entries have **no abstract**
+  (dblp/Crossref only expose titles). Score them from the title alone and say so in
+  the `reason` (e.g. *"title-only, no abstract available"*). Prefer to be conservative
+  rather than to invent relevance.
+- **A whole year is missing from S2 but present in dblp** — flag this loudly to the
+  user; per-year trends across that year are not comparable.
+- **No source was reachable** — say the coverage is *unverified*, not *confirmed*.
+
+In recall mode (a keyword query) the cross-check is less meaningful, since the other
+sources return the whole program while S2 returned a keyword subset — the "missing"
+list will be huge and mostly irrelevant. Either skip this step, or run it without
+`--merge` purely to confirm the venue/years are indexed at all.
+
 ### 3. Score every candidate — THIS IS YOUR CORE JOB
 
 Read `candidates.json`. For **each** candidate, read its `title`, `abstract`, and
@@ -122,34 +173,56 @@ python3 scripts/build_ods.py \
   --threshold 0.3
 ```
 
-This drops papers scoring below the threshold (the "poorly related or unrelated"
-ones) and any that are still unscored, then writes `results.ods` with three sheets,
-built for topic statistics:
+The thresholds are **not baked in**. Every scored candidate is written to the Papers
+sheet; the cut-offs live in an editable `Config` sheet, and everything downstream of
+them is a spreadsheet formula. The user can re-band the entire workbook by typing a
+new number — no re-run needed. `--threshold` (and the optional
+`--direct-threshold` / `--strong-threshold` / `--moderate-threshold`) only set the
+**initial** values of those cells.
 
-- **Papers** — one tidy row per kept paper, sorted best-first, with analysis-friendly
-  typed columns: `Topic | Paper ID | Title | Authors | Year | Venue | Score |
-  Relevance | Direct | Reason | Link`. `Topic` is the keyword (so several
-  single-topic exports can be stacked into one dataset for cross-topic stats), `Year`
-  is numeric, `Score` is a float, `Relevance` is a band (Direct / Strong / Moderate /
-  Weak), and `Direct` is `1` for a direct (=1.0) match else `0`. Link cells are real
-  clickable hyperlinks (open-access PDF if available, otherwise a DOI resolving to
-  IEEE Xplore).
+Four sheets, built for topic statistics:
+
+- **Papers** — one tidy row per scored paper, sorted best-first: `Topic | Paper ID |
+  Title | Authors | Year | Venue | Score | Relevance | Direct | Kept | Sources |
+  Reason | Link`. `Topic` is the keyword (so several single-topic exports can be
+  stacked into one dataset for cross-topic stats), `Year` is numeric, `Score` is a
+  float. `Relevance` (band), `Direct` (1/0) and `Kept` (1/0) are **formulas** reading
+  the Config thresholds. `Sources` lists which indexes confirmed the paper, if step 2b
+  ran. Link cells are real clickable hyperlinks (open-access PDF if available,
+  otherwise a DOI resolving to IEEE Xplore).
 - **Summary** — a per-year cross-tab: `Fetched | Matched | Direct | Strong | Moderate
-  | Weak | Avg score | Matched share`, plus a TOTAL row. In `--all` mode "Matched
-  share" is the fraction of the whole program that dealt with the topic — the headline
-  statistic. Counts here include dropped papers in the "Fetched" denominator.
-- **Meta** — the run parameters (topic, venue, years, mode, query, threshold, totals,
-  timestamp), so the export is self-describing.
+  | Weak | Avg score | Matched share`, plus a TOTAL row. Every cell is a
+  `COUNTIFS`/`AVERAGEIFS` over the Papers sheet gated on `Kept`, so it recomputes when
+  a threshold changes. `Fetched` is the only static column — it counts everything
+  fetched, including unscored papers, and is a fetch-time fact no formula can derive.
+  In `--all` mode "Matched share" is the fraction of the whole program that dealt with
+  the topic — the headline statistic.
+- **Config** — the four editable thresholds (Direct / Strong / Moderate / Keep) in
+  yellow cells, each with a note. Papers below the Keep threshold stay **listed** on
+  Papers but are flagged `Kept = 0` and excluded from every Summary count; lowering
+  the threshold brings them back without re-running anything.
+- **Meta** — the run parameters (topic, venue, years, mode, query, cross-checked
+  sources, totals, timestamp), so the export is self-describing.
 
-The Papers sheet is deliberately pivot-ready; the Summary sheet is a static snapshot.
-No charts are generated.
+The Papers sheet is deliberately pivot-ready. No charts are generated.
+
+Tell the user the thresholds are adjustable on the Config sheet — it is the main
+reason the export is worth keeping rather than re-running.
 
 ### 5. Report
 
 Tell the user: how many candidates were fetched, how many survived the threshold,
 where `results.ods` is, and a couple of highlights (the clear 1.0s and any
-interesting partial-match finds). Note if `S2_API_KEY` was missing (results may be
-incomplete) or if many papers lacked abstracts.
+interesting partial-match finds).
+
+Also report, honestly:
+
+- **Coverage** — which cross-check sources were reached and what they said. If a
+  source found papers S2 missed, give the number; if none was reachable, say coverage
+  is unverified. Never present an unchecked S2 result as a complete survey.
+- **Evidence quality** — how many papers lacked an abstract (title-only scoring is
+  weaker), and whether `S2_API_KEY` was missing.
+- **The Config sheet** — the thresholds are theirs to change.
 
 ## What "deep research within the content" realistically means
 
@@ -161,8 +234,9 @@ basis for judgment. If the user has downloaded PDFs and wants deeper analysis, t
 can drop them in a folder and ask you to read specific ones to refine borderline
 scores — but do **not** attempt to scrape or bypass paywalls.
 
-## Optional: IEEE Xplore enrichment
+## Optional: IEEE Xplore
 
-If `IEEE_XPLORE_API_KEY` is set (institutional), you may cross-reference for better
-links or abstracts. This is optional; the DOI links produced by default already
-resolve to IEEE Xplore. Do not block on it.
+If `IEEE_XPLORE_API_KEY` is set (institutional), add `ieee` to
+`crosscheck_sources.py --sources` for a fourth independent view of the program, and
+for better links. This is optional; the DOI links produced by default already resolve
+to IEEE Xplore, and dblp already gives a strong program listing. Do not block on it.

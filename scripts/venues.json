@@ -7,7 +7,33 @@
       "Digest of Technical Papers - IEEE International Solid-State Circuits Conference",
       "ISSCC"
     ],
-    "venue_substrings": ["solid-state circuits conference", "isscc"]
+    "venue_substrings": [
+      "solid-state circuits conference",
+      "isscc"
+    ],
+    "dblp_streams": [
+      "conf/isscc"
+    ],
+    "openalex_queries": [
+      "International Solid-State Circuits Conference",
+      "ISSCC"
+    ],
+    "crossref_queries": [
+      "IEEE International Solid-State Circuits Conference"
+    ],
+    "ieee_publication_titles": [
+      "IEEE International Solid-State Circuits Conference"
+    ],
+    "venue_exclude_substrings": [
+      "asian solid-state",
+      "asian solid state",
+      "a-sscc",
+      "asscc",
+      "european solid-state",
+      "european solid state",
+      "esscirc",
+      "esserc"
+    ]
   },
   "VLSI": {
     "description": "IEEE Symposium on VLSI Technology and Circuits (formerly Symposium on VLSI Circuits)",
@@ -19,7 +45,32 @@
       "VLSI Circuits",
       "VLSI Technology"
     ],
-    "venue_substrings": ["vlsi circuits", "vlsi technology"]
+    "venue_substrings": [
+      "vlsi circuits",
+      "vlsi technology"
+    ],
+    "dblp_streams": [
+      "conf/vlsic",
+      "conf/vlsit"
+    ],
+    "openalex_queries": [
+      "Symposium on VLSI Circuits",
+      "Symposium on VLSI Technology and Circuits"
+    ],
+    "crossref_queries": [
+      "Symposium on VLSI Circuits",
+      "Symposium on VLSI Technology and Circuits"
+    ],
+    "ieee_publication_titles": [
+      "Symposium on VLSI Circuits",
+      "IEEE Symposium on VLSI Technology and Circuits"
+    ],
+    "venue_exclude_substrings": [
+      "asian solid-state",
+      "a-sscc",
+      "vlsi design and test",
+      "international conference on vlsi design"
+    ]
   },
   "ESSERC": {
     "description": "IEEE European Solid-State Electronics Research Conference (formerly ESSCIRC)",
@@ -31,6 +82,33 @@
       "ESSERC",
       "IEEE European Solid-State Electronics Research Conference"
     ],
-    "venue_substrings": ["european solid-state", "european solid state", "esscirc", "esserc"]
+    "venue_substrings": [
+      "european solid-state",
+      "european solid state",
+      "esscirc",
+      "esserc"
+    ],
+    "dblp_streams": [
+      "conf/esscirc"
+    ],
+    "openalex_queries": [
+      "European Solid-State Circuits Conference",
+      "ESSCIRC",
+      "European Solid-State Electronics Research Conference"
+    ],
+    "crossref_queries": [
+      "European Solid-State Circuits Conference",
+      "ESSCIRC"
+    ],
+    "ieee_publication_titles": [
+      "ESSCIRC",
+      "European Solid-State Circuits Conference"
+    ],
+    "venue_exclude_substrings": [
+      "asian solid-state",
+      "asian solid state",
+      "a-sscc",
+      "international solid-state circuits conference"
+    ]
   }
 }

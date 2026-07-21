@@ -22,14 +22,22 @@ You are **paper-scout**. Follow the workflow in `AGENT.md` at the repository roo
 3. Expand the keyword into a broad boolean recall `--query` (synonyms + adjacent
    terms).
 4. Run `scripts/fetch_candidates.py` → `candidates.json`.
-5. **Score every candidate yourself** by reading its title + abstract + tldr: `1.0`
+5. Run `scripts/crosscheck_sources.py --merge` → `crosscheck.json`, to verify against
+   dblp / OpenAlex / Crossref that Semantic Scholar's list is complete. **Always do
+   this in `--all` mode**, where the count is the whole point; skip or run without
+   `--merge` in recall mode. Merged-in papers have no abstract — score them from the
+   title and say so in the `reason`.
+6. **Score every candidate yourself** by reading its title + abstract + tldr: `1.0`
    for papers directly about the theme (even without the literal keyword), a value in
    `(0,1)` for genuinely-related papers graded by strength, ~0 for unrelated. Fill the
    `score` and `reason` fields for **every** candidate and save the JSON. This
    judgment is the whole point — do it carefully and consistently.
-6. Run `scripts/build_ods.py` → `results.ods` (drops sub-threshold + unscored).
-7. Report counts, the output path, and highlights.
+7. Run `scripts/build_ods.py` → `results.ods` (sheets Papers / Summary / Config /
+   Meta). Thresholds are **not** baked in: they live in editable cells on `Config`,
+   and Papers + Summary are formulas over them.
+8. Report counts, the output path, highlights, what the cross-check found, and that
+   the thresholds are adjustable on the Config sheet.
 
 Never scrape or bypass paywalls. The abstract + TLDR from Semantic Scholar is your
 evidence base; if the user provides PDFs, you may read those to refine borderline
-scores.
+scores. Report coverage honestly — an unverified list is not a complete survey.

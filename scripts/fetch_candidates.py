@@ -135,12 +135,20 @@ def enrich_tldr(collected, keyword, api_key, sleep):
     return filled
 
 
-def venue_matches(paper_venue, pub_venue, substrings):
+def venue_matches(paper_venue, pub_venue, substrings, exclude=()):
+    """True if the venue looks like ours and not like a sibling conference.
+
+    The exclusions matter: 'IEEE Asian Solid-State Circuits Conference'
+    contains ISSCC's 'solid-state circuits conference' substring, so without
+    them an ISSCC survey silently absorbs A-SSCC's program.
+    """
     hay = (paper_venue or "").lower()
     if isinstance(pub_venue, dict):
         hay += " " + (pub_venue.get("name") or "").lower()
         for alt in pub_venue.get("alternate_names") or []:
             hay += " " + str(alt).lower()
+    if any(s in hay for s in exclude):
+        return False
     return any(s in hay for s in substrings)
 
 
@@ -235,7 +243,8 @@ def main():
                 continue
             if not args.no_venue_filter and not venue_matches(
                     paper.get("venue"), paper.get("publicationVenue"),
-                    vconf["venue_substrings"]):
+                    vconf["venue_substrings"],
+                    vconf.get("venue_exclude_substrings", ())):
                 continue
             pid = paper.get("paperId")
             if not pid or pid in collected:

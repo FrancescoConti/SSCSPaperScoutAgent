@@ -11,26 +11,33 @@ Each surviving paper gets a **score in `[0, 1]`**:
   long as it is unambiguously about it).
 - **`0 < x < 1`** — the keyword doesn't appear (or only in passing), but the paper is
   judged genuinely related, graded by how strongly.
-- Papers below the threshold (default `0.3`) are **removed** from the spreadsheet.
+- Papers below the keep threshold (default `0.3`) are excluded from the statistics —
+  but they stay listed, because **the thresholds live in the spreadsheet**, not in the
+  export.
 
 The workbook is organized for **topic statistics** (no charts — that's out of scope):
 
-- **`Papers`** — one tidy, pivot-ready row per kept paper: `Topic · Paper ID · Title ·
-  Authors · Year · Venue · Score · Relevance · Direct · Reason · Link`. `Topic` is the
-  keyword (stack several single-topic exports into one dataset for cross-topic stats),
-  `Year` is numeric, `Score` a float, `Relevance` a band (Direct/Strong/Moderate/Weak),
-  and `Direct` a 1/0 flag that sums to a direct-match count. Links are clickable
-  (open-access PDF where available, otherwise a DOI resolving to IEEE Xplore).
+- **`Papers`** — one tidy, pivot-ready row per scored paper: `Topic · Paper ID · Title ·
+  Authors · Year · Venue · Score · Relevance · Direct · Kept · Sources · Reason · Link`.
+  `Topic` is the keyword (stack several single-topic exports into one dataset for
+  cross-topic stats), `Year` is numeric, `Score` a float. `Relevance` (band), `Direct`
+  and `Kept` (1/0 flags) are **formulas** driven by the Config sheet. `Sources` lists
+  which indexes confirmed the paper. Links are clickable (open-access PDF where
+  available, otherwise a DOI resolving to IEEE Xplore).
 - **`Summary`** — a per-year cross-tab (`Fetched · Matched · Direct · Strong ·
-  Moderate · Weak · Avg score · Matched share`) with a TOTAL row. In `--all` mode
-  "Matched share" is the fraction of the whole conference program that dealt with the
-  topic.
-- **`Meta`** — the run parameters, so each export is self-describing.
+  Moderate · Weak · Avg score · Matched share`) with a TOTAL row, computed **live**
+  with `COUNTIFS`/`AVERAGEIFS` over the Papers sheet. In `--all` mode "Matched share"
+  is the fraction of the whole conference program that dealt with the topic.
+- **`Config`** — the four band cut-offs (Direct / Strong / Moderate / Keep) as editable
+  yellow cells. Type a new number and the Papers bands and the entire Summary re-derive
+  themselves; no re-run, no re-scoring.
+- **`Meta`** — the run parameters and which sources were cross-checked, so each export
+  is self-describing.
 
 ## How it works
 
-Two deterministic Python scripts do the API calls and file I/O; the **agent** does the
-relevance scoring (that's the part only judgment can do):
+Three deterministic Python scripts do the API calls and file I/O; the **agent** does
+the relevance scoring (that's the part only judgment can do):
 
 ```
 keyword + venue + years
@@ -41,10 +48,14 @@ scripts/fetch_candidates.py   ── Semantic Scholar Graph API ──▶  candi
         │                                                          tldr, authors,
         │                                                          links, keyword_hit)
         ▼
+scripts/crosscheck_sources.py ── dblp / OpenAlex / Crossref ───▶  crosscheck.json
+        │                        (+ IEEE Xplore with a key)        + missing papers
+        │                                                            merged back in
+        ▼
   AGENT scores each paper (score + reason)  ─────────────────▶  candidates.scored.json
         │
         ▼
-scripts/build_ods.py          ── drops sub-threshold / unscored ─▶  results.ods
+scripts/build_ods.py          ── formulas, not baked-in cutoffs ─▶  results.ods
 ```
 
 The agent instructions live in **[`AGENT.md`](AGENT.md)**; the Claude Code subagent
@@ -90,16 +101,56 @@ python3 scripts/fetch_candidates.py \
 python3 scripts/fetch_candidates.py \
   --venue ISSCC --years 2021-2024 --keyword "LLM" --all --out candidates.json
 
-# 2. Score them: edit candidates.json, filling `score` (0..1) and `reason`
+# 2. Cross-check that Semantic Scholar's list is complete, and fold in what it
+#    missed (--merge). Essential when the count itself is the result.
+python3 scripts/crosscheck_sources.py \
+  --venue ISSCC --years 2021-2024 \
+  --in candidates.json --out crosscheck.json --merge
+
+# 3. Score them: edit candidates.json, filling `score` (0..1) and `reason`
 #    for each paper (this is the judgment step the agent automates).
 
-# 3. Build the spreadsheet
+# 4. Build the spreadsheet (--threshold only seeds the editable Config cell)
 python3 scripts/build_ods.py --in candidates.json --out results.ods --threshold 0.3
 ```
 
+### Cross-checking coverage
+
+Semantic Scholar indexes the citation graph, not conference programs, so its venue
+metadata for these conferences has gaps. `crosscheck_sources.py` independently
+enumerates the same venue/years from sources that *do* index programs, and reports
+what S2 missed:
+
+| source | default | key needed | notes |
+|--------|---------|-----------|-------|
+| `dblp` | ✅ | — | the most reliable conference-program index |
+| `crossref` | ✅ | — | DOI registry; sees whatever IEEE deposited |
+| `ieee` | — | `IEEE_XPLORE_API_KEY` | authoritative, but institutional |
+| `openalex` | — | — (set `OPENALEX_MAILTO` for the polite pool) | broad open catalogue, but see caveat below |
+
+Default `--sources dblp,crossref`. Papers are matched by DOI, then by normalized
+title, then by token overlap; proceedings front matter (session overviews, indexes,
+committee pages) is filtered out so it can't inflate the denominator.
+`crosscheck.json` gives a per-source `coverage` figure and the full list of missing
+papers; `--merge` appends them to `candidates.json` for scoring (they arrive
+**title-only**, with no abstract). Every source is optional and failures are
+non-fatal — but if none is reachable, treat the coverage as *unverified* rather than
+confirmed.
+
+> **OpenAlex caveat:** it is off by default because its venue metadata for IEEE
+> conferences is poor — many ISSCC works are present in OpenAlex with no
+> `primary_location` at all, so enumerating by venue silently under-reports and its
+> `coverage` number would be misleading. It stays available (`--sources ...,openalex`)
+> for venues OpenAlex does index properly.
+
 ## Supported conferences
 
-Defined in `scripts/venues.json` (name aliases + venue-verification substrings):
+Defined in `scripts/venues.json` — name aliases, venue-verification substrings, the
+per-source query hints used by the cross-check, and **`venue_exclude_substrings`**,
+which keep sibling conferences out. That last one is not optional bookkeeping: *IEEE
+**Asian** Solid-State Circuits Conference* (A-SSCC) contains ISSCC's
+`"solid-state circuits conference"` substring, and without the exclusion an ISSCC
+survey quietly absorbs A-SSCC's entire program.
 
 | key       | conference |
 |-----------|------------|
@@ -118,6 +169,10 @@ Add more by editing `scripts/venues.json`.
   refine borderline scores. The pipeline never scrapes or bypasses paywalls.
 - **Coverage** depends on Semantic Scholar's indexing of the venue; the venue filter
   is verified locally against known name variants. If a run returns too few papers,
-  rerun `fetch_candidates.py` with `--no-venue-filter` or a broader `--query`.
-- **IEEE Xplore API** enrichment is optional and only useful with an institutional
+  rerun `fetch_candidates.py` with `--no-venue-filter` or a broader `--query`, and use
+  `crosscheck_sources.py` to quantify the gap instead of guessing at it.
+- **Merged-in papers are title-only.** dblp and Crossref expose no abstracts, so
+  papers recovered by the cross-check are scored from their titles alone — weaker
+  evidence than the S2 abstract+TLDR path, and the `reason` should say so.
+- **IEEE Xplore API** access is optional and only useful with an institutional
   key (`IEEE_XPLORE_API_KEY`); default DOI links already resolve to Xplore.
