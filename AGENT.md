@@ -46,6 +46,11 @@ noise in step 3.
 
 ### 2. Fetch candidates
 
+There are two modes. Pick based on what the user asked for:
+
+**Recall mode (default)** — fetch the keyword-recall subset. Faster, fewer papers to
+score. Good when the user wants papers *about* a topic.
+
 ```bash
 python3 scripts/fetch_candidates.py \
   --venue ISSCC \
@@ -55,13 +60,24 @@ python3 scripts/fetch_candidates.py \
   --out candidates.json
 ```
 
-`--keyword` is the raw theme (used to flag literal hits); `--query` is your expanded
-boolean expression. This writes `candidates.json` with, per paper: `paper_id`,
-`title`, `authors`, `year`, `venue`, `abstract`, `tldr`, `doi`, `link`,
-`keyword_hit`, and empty `score`/`reason` fields for you to fill.
+**All mode (`--all`)** — scan **every** paper in the venue/years, ignoring `--query`.
+Use this when the goal is **statistics / a complete survey** ("what fraction of ISSCC
+dealt with X", "how did topic Y trend across years"), because a recall query would
+bias the denominator. It yields far more candidates (e.g. ISSCC is ~280 papers/year),
+so you will score more papers — do it, but in batches.
 
-If the run returns suspiciously few papers, the venue filter may be too strict — retry
-with `--no-venue-filter`, or widen `--query`.
+```bash
+python3 scripts/fetch_candidates.py \
+  --venue ISSCC --years 2021-2024 --keyword "LLM" --all --out candidates.json
+```
+
+In both modes `--keyword` is the raw theme (used to flag literal hits). The output
+`candidates.json` has, per paper: `paper_id`, `title`, `authors`, `year`, `venue`,
+`abstract`, `tldr`, `doi`, `link`, `keyword_hit`, and empty `score`/`reason` fields
+for you to fill. `meta.mode` records which mode was used.
+
+If a run returns suspiciously few papers, the venue filter may be too strict — retry
+with `--no-venue-filter`, or (recall mode) widen `--query`.
 
 ### 3. Score every candidate — THIS IS YOUR CORE JOB
 

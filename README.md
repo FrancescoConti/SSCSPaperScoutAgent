@@ -69,12 +69,16 @@ The subagent will expand the keyword, fetch candidates, score them, and drop
 ### Manually (if you want to drive the scripts yourself)
 
 ```bash
-# 1. Fetch candidates
+# 1. Fetch candidates — either a keyword-recall subset (default)...
 python3 scripts/fetch_candidates.py \
   --venue ISSCC --years 2021-2024 \
   --keyword "LLM" \
   --query '("LLM" | "large language model" | "transformer" | "attention")' \
   --out candidates.json
+
+# ...or EVERY paper in the venue/years (for complete surveys & statistics):
+python3 scripts/fetch_candidates.py \
+  --venue ISSCC --years 2021-2024 --keyword "LLM" --all --out candidates.json
 
 # 2. Score them: edit candidates.json, filling `score` (0..1) and `reason`
 #    for each paper (this is the judgment step the agent automates).

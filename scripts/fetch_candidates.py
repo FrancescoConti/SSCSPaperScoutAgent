@@ -173,7 +173,12 @@ def main():
     ap.add_argument("--query", default=None,
                     help="Boolean recall query for the API. Defaults to --keyword. "
                          "Expand with synonyms to raise recall, e.g. "
-                         "'(\"LLM\" | \"large language model\" | \"transformer\")'.")
+                         "'(\"LLM\" | \"large language model\" | \"transformer\")'. "
+                         "Ignored when --all is set.")
+    ap.add_argument("--all", dest="all_mode", action="store_true",
+                    help="Scan EVERY paper in the venue/years (ignore --query). Use "
+                         "when you want the agent to survey the full program rather "
+                         "than a keyword-recall subset. Yields many more candidates.")
     ap.add_argument("--out", default="candidates.json")
     ap.add_argument("--max", type=int, default=2000, help="Max candidates to keep.")
     ap.add_argument("--no-venue-filter", action="store_true",
@@ -188,7 +193,6 @@ def main():
     vconf = venues[key]
 
     year_param, (ylo, yhi) = parse_years(args.years)
-    query = args.query or f'"{args.keyword}"'
     api_key = os.environ.get("S2_API_KEY", "").strip()
     if not api_key:
         sys.stderr.write(
@@ -196,12 +200,17 @@ def main():
             "which is heavily rate-limited. See .env.example.\n")
 
     params = {
-        "query": query,
         "fields": FIELDS,
         "year": year_param,
         "venue": ",".join(vconf["s2_aliases"]),
         "sort": "citationCount:desc",
     }
+    if args.all_mode:
+        query = "(ALL venue papers)"
+        # No `query` param -> the venue/year filter returns the whole program.
+    else:
+        query = args.query or f'"{args.keyword}"'
+        params["query"] = query
 
     sys.stderr.write(
         f"Fetching {key} {year_param} | query={query}\n")
@@ -270,6 +279,7 @@ def main():
             "years": year_param,
             "keyword": args.keyword,
             "query": query,
+            "mode": "all" if args.all_mode else "recall",
             "candidate_count": len(collected),
         },
         "candidates": sorted(collected.values(),
