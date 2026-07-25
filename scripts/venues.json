@@ -72,8 +72,76 @@
       "international conference on vlsi design"
     ]
   },
+  "CICC": {
+    "description": "IEEE Custom Integrated Circuits Conference",
+    "cli_aliases": [],
+    "s2_aliases": [
+      "IEEE Custom Integrated Circuits Conference",
+      "Custom Integrated Circuits Conference",
+      "CICC"
+    ],
+    "venue_substrings": [
+      "custom integrated circuits",
+      "cicc"
+    ],
+    "dblp_streams": [
+      "conf/cicc"
+    ],
+    "openalex_queries": [
+      "Custom Integrated Circuits Conference",
+      "CICC"
+    ],
+    "crossref_queries": [
+      "IEEE Custom Integrated Circuits Conference"
+    ],
+    "ieee_publication_titles": [
+      "IEEE Custom Integrated Circuits Conference"
+    ],
+    "venue_exclude_substrings": []
+  },
+  "ASSCC": {
+    "description": "IEEE Asian Solid-State Circuits Conference",
+    "_note": "Semantic Scholar has mismerged this venue's publicationVenue entity with an unrelated 'International Symposium on Security in Computing and Communications' -- the raw `venue` string on A-SSCC candidates will read that way, NOT 'Asian Solid-State Circuits Conference'. Matching still works because publicationVenue.alternate_names for that (mismerged) entity correctly lists 'A-SSCC' / 'Asian Solid-State Circuits Conference' / 'SSCC', which venue_matches() in fetch_candidates.py checks. Verified against the live S2 API 2026-07-25: the paper titles under that venue string are unmistakably A-SSCC circuits papers (PLLs, VCOs, mmWave transceivers), so this is an S2 data-quality bug, not cross-venue contamination -- do NOT 'fix' this by tightening venue_substrings, that would break real A-SSCC recall.",
+    "cli_aliases": [
+      "A-SSCC"
+    ],
+    "s2_aliases": [
+      "IEEE Asian Solid-State Circuits Conference",
+      "Asian Solid-State Circuits Conference",
+      "A-SSCC",
+      "ASSCC"
+    ],
+    "venue_substrings": [
+      "asian solid-state",
+      "asian solid state",
+      "a-sscc"
+    ],
+    "dblp_streams": [
+      "conf/asscc"
+    ],
+    "openalex_queries": [
+      "Asian Solid-State Circuits Conference",
+      "A-SSCC"
+    ],
+    "crossref_queries": [
+      "IEEE Asian Solid-State Circuits Conference"
+    ],
+    "ieee_publication_titles": [
+      "IEEE Asian Solid-State Circuits Conference"
+    ],
+    "venue_exclude_substrings": [
+      "european solid-state",
+      "european solid state",
+      "esscirc",
+      "esserc",
+      "international solid-state circuits conference"
+    ]
+  },
   "ESSERC": {
     "description": "IEEE European Solid-State Electronics Research Conference (formerly ESSCIRC)",
+    "cli_aliases": [
+      "ESSCIRC"
+    ],
     "s2_aliases": [
       "ESSCIRC",
       "European Solid-State Circuits Conference",

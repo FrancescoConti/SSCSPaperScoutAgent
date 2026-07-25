@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
 Cross-check a Semantic Scholar candidate list against *other* bibliographic
-sources, to find papers S2 missed.
+sources, to find papers S2 missed -- across one or more venues at once.
 
 Semantic Scholar's venue metadata for solid-state-circuits conferences is
 patchy: some years are indexed under an alternate venue string, some papers
-have no venue at all. A survey built on S2 alone therefore has an unknown
-recall gap. This script independently enumerates the same conference/years
-from sources that index the *program* rather than the citation graph, and
-reports what is present there but absent from candidates.json.
+have no venue at all, and for VLSI it is close to absent (see venues.json /
+AGENT.md). A survey built on S2 alone therefore has an unknown recall gap.
+This script independently enumerates the same conference/years from sources
+that index the *program* rather than the citation graph, and reports what is
+present there but absent from candidates.json.
+
+`--venue` takes the same comma list / `all` as fetch_candidates.py. Each
+venue is checked, and matched, independently: the S2 lookup index for a
+given venue is built from *only* that venue's own candidates (via
+`venue_key`), so a title fuzzy-match can never cross venues -- otherwise an
+ISSCC candidate could silently absorb a VLSI dblp hit and both venues'
+coverage numbers would be meaningless.
 
 Sources (all queried independently; each is optional and failures are
 non-fatal):
@@ -27,15 +35,18 @@ non-fatal):
 
 Matching is by DOI first, then by normalized title (case/punctuation folded),
 then by a token-overlap fallback that tolerates the truncated or
-differently-punctuated titles these indexes disagree on.
+differently-punctuated titles these indexes disagree on. The fuzzy fallback
+is blocked by year (see PaperIndex) so it stays fast at multi-venue,
+multi-year scale.
 
 Usage:
-    # report only
+    # report only, one venue
     python3 crosscheck_sources.py --venue ISSCC --years 2021-2024 \
         --in candidates.json --out crosscheck.json
 
-    # report AND fold the missing papers into candidates.json for scoring
-    python3 crosscheck_sources.py --venue ISSCC --years 2021-2024 \
+    # report AND fold the missing papers into candidates.json for scoring,
+    # across every configured venue
+    python3 crosscheck_sources.py --venue all --years 2021-2024 \
         --in candidates.json --out crosscheck.json --merge
 
 Environment:
@@ -53,6 +64,8 @@ from urllib.parse import urlencode, quote
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
+from common import load_venues, parse_years, resolve_venues, normalize_payload
+
 DBLP_API = "https://dblp.org/search/publ/api"
 OPENALEX_SOURCES = "https://api.openalex.org/sources"
 OPENALEX_WORKS = "https://api.openalex.org/works"
@@ -60,8 +73,6 @@ CROSSREF_WORKS = "https://api.crossref.org/works"
 IEEE_API = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
 
 ALL_SOURCES = ["dblp", "openalex", "crossref", "ieee"]
-
-HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Words that carry no discriminating power in a circuits-conference title;
 # dropped before the token-overlap comparison.
@@ -105,22 +116,6 @@ def is_front_matter(title):
     if not t:
         return True
     return bool(NON_PAPER_RE.search(t))
-
-
-def load_venues():
-    with open(os.path.join(HERE, "venues.json"), encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def parse_years(spec):
-    spec = spec.strip()
-    if re.fullmatch(r"\d{4}", spec):
-        return int(spec), int(spec)
-    m = re.fullmatch(r"(\d{4})\s*-\s*(\d{4})", spec)
-    if not m:
-        sys.exit(f"--years must be 'YYYY' or 'YYYY-YYYY', got: {spec!r}")
-    lo, hi = int(m.group(1)), int(m.group(2))
-    return (hi, lo) if lo > hi else (lo, hi)
 
 
 def http_json(url, params=None, headers=None, retries=4, timeout=60):
@@ -204,12 +199,32 @@ def norm_doi(doi):
 
 
 class PaperIndex:
-    """Lookup of the S2 candidates by DOI / title / token set."""
+    """Lookup of one venue's S2 candidates by DOI / title / token set.
+
+    Build one of these PER VENUE, from only that venue's candidates
+    (`venue_key`-filtered by the caller) -- otherwise an ISSCC title can
+    fuzzy-absorb a VLSI dblp hit and both venues' coverage numbers become
+    meaningless.
+
+    The fuzzy fallback is O(n*m) over token sets, which is fine for one
+    venue-year but not for a multi-venue, multi-year run: five venues x 15
+    years is ~12k candidates against ~12k source records, i.e. ~10^8 set
+    intersections if done naively. `self.tokens` is therefore blocked by
+    year (`year -> [(tokens, candidate)]`) and `find()` only compares within
+    the query's own year -- safe because `dedupe()` already drops
+    out-of-range/yearless *source* records before they reach `find()`, and
+    every candidate that made it through fetch_candidates.py also carries a
+    year. Candidates that somehow lack one still need to be reachable, so
+    they sit in `self.tokens_no_year` and are always added to whichever
+    year-bucket is being scanned; a query with no year at all falls back to
+    scanning every bucket (the pre-blocking behaviour).
+    """
 
     def __init__(self, candidates):
         self.by_doi = {}
         self.by_title = {}
-        self.tokens = []
+        self.tokens = {}          # year -> [(token_set, candidate)]
+        self.tokens_no_year = []  # candidates with no year: always in scope
         for c in candidates:
             doi = norm_doi(c.get("doi"))
             if doi:
@@ -218,10 +233,25 @@ class PaperIndex:
             if nt:
                 self.by_title[nt] = c
             toks = title_tokens(c.get("title"))
-            if toks:
-                self.tokens.append((toks, c))
+            if not toks:
+                continue
+            year = c.get("year")
+            if year is None:
+                self.tokens_no_year.append((toks, c))
+            else:
+                self.tokens.setdefault(year, []).append((toks, c))
 
-    def find(self, doi, title):
+    def _fuzzy_candidates(self, year):
+        if year is None:
+            # The query itself has no year to block on -- fall back to a
+            # full scan across every year, same as the pre-blocking index.
+            bucket = list(self.tokens_no_year)
+            for lst in self.tokens.values():
+                bucket.extend(lst)
+            return bucket
+        return self.tokens.get(year, []) + self.tokens_no_year
+
+    def find(self, doi, title, year=None):
         d = norm_doi(doi)
         if d and d in self.by_doi:
             return self.by_doi[d], "doi"
@@ -230,7 +260,7 @@ class PaperIndex:
             return self.by_title[nt], "title"
         toks = title_tokens(title)
         if len(toks) >= 4:
-            for other, cand in self.tokens:
+            for other, cand in self._fuzzy_candidates(year):
                 overlap = len(toks & other)
                 # Jaccard-ish: near-identical titles that differ only in
                 # punctuation, subtitle, or a trailing "(Invited)".
@@ -510,51 +540,12 @@ def dedupe(records, ylo, yhi, vconf):
     return out, dropped
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--venue", required=True, help="ISSCC | VLSI | ESSERC")
-    ap.add_argument("--years", required=True, help="'YYYY' or 'YYYY-YYYY'")
-    ap.add_argument("--in", dest="infile", required=True,
-                    help="candidates.json from fetch_candidates.py")
-    ap.add_argument("--out", default="crosscheck.json",
-                    help="Where to write the coverage report.")
-    ap.add_argument("--sources", default="dblp,crossref",
-                    help="Comma-separated subset of: " + ",".join(ALL_SOURCES)
-                         + " (default: dblp,crossref). 'ieee' needs "
-                           "IEEE_XPLORE_API_KEY; 'openalex' indexes IEEE "
-                           "conference venues poorly and will under-report.")
-    ap.add_argument("--merge", action="store_true",
-                    help="Append papers missing from candidates.json back into it "
-                         "(score=null) so the agent can score them too.")
-    ap.add_argument("--merge-out", default=None,
-                    help="Write the merged candidate list here instead of "
-                         "overwriting --in.")
-    ap.add_argument("--sleep", type=float, default=1.0,
-                    help="Seconds between API pages.")
-    args = ap.parse_args()
-
-    venues = load_venues()
-    key = args.venue.upper()
-    if key not in venues:
-        sys.exit(f"Unknown venue {args.venue!r}. Known: {', '.join(venues)}")
-    vconf = venues[key]
-    ylo, yhi = parse_years(args.years)
-
-    requested = [s.strip().lower() for s in args.sources.split(",") if s.strip()]
-    unknown = [s for s in requested if s not in FETCHERS]
-    if unknown:
-        sys.exit(f"Unknown source(s): {', '.join(unknown)}. "
-                 f"Known: {', '.join(ALL_SOURCES)}")
-
-    with open(args.infile, encoding="utf-8") as fh:
-        data = json.load(fh)
-    candidates = data.get("candidates", [])
-    index = PaperIndex(candidates)
-
-    sys.stderr.write(
-        f"Cross-checking {key} {ylo}-{yhi} against {', '.join(requested)}\n"
-        f"  candidates.json holds {len(candidates)} papers from Semantic Scholar\n")
+def crosscheck_venue(vkey, vconf, ylo, yhi, vcandidates, requested, sleep):
+    """Run every requested source against one venue's own candidates and
+    return (per_venue_report, missing_records). `vcandidates` must already
+    be filtered to this venue's `venue_key` -- see the caller."""
+    index = PaperIndex(vcandidates)
+    sys.stderr.write(f"\n-- {vkey} ({len(vcandidates)} S2 candidates) --\n")
 
     per_source = {}
     missing_by_key = {}
@@ -563,7 +554,7 @@ def main():
     for name in requested:
         sys.stderr.write(f"  querying {name}...\n")
         try:
-            records = FETCHERS[name](vconf, ylo, yhi, args.sleep)
+            records = FETCHERS[name](vconf, ylo, yhi, sleep)
         except Exception as e:                        # noqa: BLE001 - report, continue
             sys.stderr.write(f"    {name} failed: {e}\n")
             per_source[name] = {"reachable": False, "error": str(e)}
@@ -584,7 +575,7 @@ def main():
         found_missing, by_year = [], {}
         for r in records:
             by_year[r["year"]] = by_year.get(r["year"], 0) + 1
-            hit, how = index.find(r.get("doi"), r.get("title"))
+            hit, how = index.find(r.get("doi"), r.get("title"), r.get("year"))
             if hit:
                 srcs = hit.setdefault("sources", ["semantic_scholar"])
                 if name not in srcs:
@@ -617,72 +608,184 @@ def main():
 
     missing = sorted(missing_by_key.values(),
                      key=lambda r: (r.get("year") or 0, r.get("title") or ""))
+    for r in missing:
+        r["venue_key"] = vkey  # so a merged record and the flat report both know
     missing_by_year = {}
     for r in missing:
         y = str(r.get("year"))
         missing_by_year[y] = missing_by_year.get(y, 0) + 1
 
     report = {
-        "venue": key,
+        "venue": vkey,
         "years": f"{ylo}-{yhi}",
-        "s2_candidate_count": len(candidates),
+        "s2_candidate_count": len(vcandidates),
         "sources": per_source,
         "sources_reached": reached,
         "missing_count": len(missing),
         "missing_by_year": missing_by_year,
         "missing": missing,
     }
+
+    if not reached:
+        sys.stderr.write(
+            f"  WARNING: no cross-check source was reachable for {vkey} — "
+            f"coverage is UNVERIFIED, not confirmed.\n")
+    else:
+        worst = min((per_source[s]["coverage"] for s in reached), default=1.0)
+        sys.stderr.write(
+            f"  {vkey}: {len(missing)} papers found by {'/'.join(reached)} but "
+            f"absent from Semantic Scholar (worst per-source coverage {worst:.0%}).\n")
+
+    return report, missing
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--venue", required=True,
+                    help="Comma list (e.g. 'ISSCC,VLSI,CICC') or 'all'. See "
+                         "venues.json; cli_aliases like ESSCIRC/A-SSCC are also "
+                         "accepted.")
+    ap.add_argument("--years", required=True, help="'YYYY' or 'YYYY-YYYY'")
+    ap.add_argument("--in", dest="infile", required=True,
+                    help="candidates.json from fetch_candidates.py (or a legacy "
+                         "single-venue/single-topic file -- upgraded on load).")
+    ap.add_argument("--out", default="crosscheck.json",
+                    help="Where to write the coverage report.")
+    ap.add_argument("--sources", default="dblp,crossref",
+                    help="Comma-separated subset of: " + ",".join(ALL_SOURCES)
+                         + " (default: dblp,crossref). 'ieee' needs "
+                           "IEEE_XPLORE_API_KEY; 'openalex' indexes IEEE "
+                           "conference venues poorly and will under-report.")
+    ap.add_argument("--merge", action="store_true",
+                    help="Append papers missing from candidates.json back into it "
+                         "(scores=null for every topic) so the agent can score "
+                         "them too.")
+    ap.add_argument("--merge-out", default=None,
+                    help="Write the merged candidate list here instead of "
+                         "overwriting --in.")
+    ap.add_argument("--sleep", type=float, default=1.0,
+                    help="Seconds between API pages.")
+    args = ap.parse_args()
+
+    venues = load_venues()
+    venue_keys = resolve_venues(args.venue)
+    _, (ylo, yhi) = parse_years(args.years)
+
+    requested = [s.strip().lower() for s in args.sources.split(",") if s.strip()]
+    unknown = [s for s in requested if s not in FETCHERS]
+    if unknown:
+        sys.exit(f"Unknown source(s): {', '.join(unknown)}. "
+                 f"Known: {', '.join(ALL_SOURCES)}")
+
+    with open(args.infile, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data = normalize_payload(data)
+    candidates = data.get("candidates", [])
+    topics = data.get("meta", {}).get("topics", [])
+
+    sys.stderr.write(
+        f"Cross-checking {', '.join(venue_keys)} {ylo}-{yhi} against "
+        f"{', '.join(requested)}\n"
+        f"  candidates.json holds {len(candidates)} papers total from Semantic Scholar\n")
+
+    by_venue = {}
+    all_missing = []
+    rollup = {name: {"total_found": 0, "total_matched_in_s2": 0,
+                     "total_missing_from_s2": 0, "reachable_in": []}
+             for name in requested}
+
+    for vkey in venue_keys:
+        vconf = venues[vkey]
+        vcandidates = [c for c in candidates if c.get("venue_key") == vkey]
+        report, missing = crosscheck_venue(vkey, vconf, ylo, yhi, vcandidates,
+                                           requested, args.sleep)
+        by_venue[vkey] = report
+        all_missing.extend(missing)
+        for name in report["sources_reached"]:
+            rollup[name]["reachable_in"].append(vkey)
+        for name, s in report["sources"].items():
+            if s.get("reachable"):
+                rollup[name]["total_found"] += s["found"]
+                rollup[name]["total_matched_in_s2"] += s["matched_in_s2"]
+                rollup[name]["total_missing_from_s2"] += s["missing_from_s2"]
+
+    for name in requested:
+        rr = rollup[name]
+        rr["coverage"] = (round(rr["total_matched_in_s2"] / rr["total_found"], 3)
+                          if rr["total_found"] else None)
+
+    report = {
+        "venues": venue_keys,
+        "years": f"{ylo}-{yhi}",
+        "sources_requested": requested,
+        "by_venue": by_venue,
+        "rollup": rollup,
+        "missing_count_total": len(all_missing),
+    }
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(report, fh, ensure_ascii=False, indent=2)
 
-    if args.merge and missing:
-        for r in missing:
+    reached_any = sorted({n for vkey in venue_keys for n in by_venue[vkey]["sources_reached"]})
+
+    if args.merge and all_missing:
+        for r in all_missing:
+            vkey = r.get("venue_key", "")
+            pid = (f"{r['sources'][0]}:"
+                  f"{norm_doi(r.get('doi')) or norm_title(r.get('title'))[:60]}")
             candidates.append({
-                "paper_id": f"{r['sources'][0]}:{norm_doi(r.get('doi')) or norm_title(r.get('title'))[:60]}",
+                "paper_id": pid,
                 "title": r.get("title", ""),
                 "authors": r.get("authors", []),
                 "year": r.get("year"),
                 "venue": r.get("venue", ""),
+                "venue_key": vkey,
                 "abstract": "",
                 "tldr": "",
                 "doi": r.get("doi", ""),
                 "link": r.get("link", ""),
-                "keyword_hit": False,
                 "sources": r["sources"],
-                "score": None,
-                "reason": "",
+                "keyword_hits": {t["name"]: False for t in topics},
+                "scores": {t["name"]: None for t in topics},
+                "reasons": {t["name"]: "" for t in topics},
             })
         data["candidates"] = sorted(
-            candidates, key=lambda c: (c.get("year") or 0, c.get("title") or ""))
+            candidates, key=lambda c: (c.get("venue_key") or "", c.get("year") or 0,
+                                       c.get("title") or ""))
         meta = data.setdefault("meta", {})
-        meta["crosschecked_sources"] = ["semantic_scholar"] + reached
-        meta["merged_from_crosscheck"] = len(missing)
+        prior = meta.get("crosschecked_sources") or []
+        meta["crosschecked_sources"] = list(dict.fromkeys(
+            prior + ["semantic_scholar"] + reached_any))
+        meta["merged_from_crosscheck"] = len(all_missing)
         meta["candidate_count"] = len(data["candidates"])
         target = args.merge_out or args.infile
         with open(target, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
         sys.stderr.write(
-            f"\nMerged {len(missing)} missing papers into {target}. "
+            f"\nMerged {len(all_missing)} missing papers into {target}. "
             f"They have no abstract — score them from the title, or lower their "
             f"weight, and re-run build_ods.py.\n")
     elif args.merge:
         # Still record that a cross-check happened, so Meta can say so.
         meta = data.setdefault("meta", {})
-        meta["crosschecked_sources"] = ["semantic_scholar"] + reached
+        prior = meta.get("crosschecked_sources") or []
+        meta["crosschecked_sources"] = list(dict.fromkeys(
+            prior + ["semantic_scholar"] + reached_any))
         target = args.merge_out or args.infile
         with open(target, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
 
-    if not reached:
+    if not reached_any:
         sys.stderr.write(
-            "\nWARNING: no cross-check source was reachable — coverage is "
-            "UNVERIFIED, not confirmed.\n")
+            "\nWARNING: no cross-check source was reachable for ANY venue — "
+            "coverage is UNVERIFIED, not confirmed.\n")
     else:
-        worst = min((per_source[s]["coverage"] for s in reached), default=1.0)
         sys.stderr.write(
-            f"\nWrote {args.out}: {len(missing)} papers found by "
-            f"{'/'.join(reached)} but absent from Semantic Scholar "
-            f"(worst per-source coverage {worst:.0%}).\n")
+            f"\nWrote {args.out}: {len(all_missing)} papers found across "
+            f"{', '.join(venue_keys)} by sources not in Semantic Scholar. "
+            f"Per-source rollup coverage: " +
+            ", ".join(f"{n}={rollup[n]['coverage']:.0%}" for n in requested
+                      if rollup[n]["coverage"] is not None) + "\n")
 
 
 if __name__ == "__main__":
