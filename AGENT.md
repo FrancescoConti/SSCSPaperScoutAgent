@@ -34,6 +34,27 @@ nothing extra at fetch time; see that step.
 
 ## Workflow
 
+### 0. Set up the workspace
+
+All output files for this run — `candidates.json`, `crosscheck.json`,
+`candidates.scored.json`, `results.ods`, and any variants of those — go under a
+per-run subfolder of `workspace/` in the current folder (the directory you were
+invoked in), **never** at the repo root. Compute the folder name once, at the start
+of the run, as `<date>_<8-char hash>`:
+
+```bash
+HASH="$(date +%Y%m%d)_$(python3 -c 'import secrets; print(secrets.token_hex(4))')"
+WORKSPACE="workspace/$HASH"
+mkdir -p "$WORKSPACE"
+```
+
+This gives e.g. `workspace/20260904_a3f9c21b`. Compute `HASH`/`WORKSPACE` **once** per
+run and reuse it for every script call below — do not recompute it mid-run, and do
+not reuse a previous run's folder. Pass every `--out`/`--in` path prefixed with
+`$WORKSPACE/` (e.g. `$WORKSPACE/candidates.json`, `$WORKSPACE/results.ods`). This
+keeps each survey's outputs isolated and out of the repo root, so nothing needs to be
+moved by hand afterward.
+
 ### 1. Expand each theme into a recall query
 
 The API step is about **recall**, not precision — cast a wide net, then you filter by
@@ -69,7 +90,7 @@ python3 scripts/fetch_candidates.py \
   --venue ISSCC \
   --years 2021-2024 \
   --topic 'LLM=("LLM" | "large language model" | "transformer" | "attention" | "generative AI")' \
-  --out candidates.json
+  --out "$WORKSPACE/candidates.json"
 ```
 
 **All mode (`--all`)** — scan **every** paper in the venue(s)/years, ignoring each
@@ -85,7 +106,7 @@ python3 scripts/fetch_candidates.py \
   --venue ISSCC,VLSI,CICC,ASSCC,ESSERC --years 2021-2024 \
   --topic 'LLM=("LLM" | "large language model")' \
   --topic 'CIM=("compute-in-memory" | "CIM" | "SRAM macro")' \
-  --all --out candidates.json
+  --all --out "$WORKSPACE/candidates.json"
 ```
 
 `--venue` accepts a comma list or the literal `all` for every configured venue.
@@ -117,7 +138,7 @@ against indexes that list the **program** rather than the citation graph — per
 ```bash
 python3 scripts/crosscheck_sources.py \
   --venue ISSCC,VLSI,CICC,ASSCC,ESSERC --years 2021-2024 \
-  --in candidates.json --out crosscheck.json --merge
+  --in "$WORKSPACE/candidates.json" --out "$WORKSPACE/crosscheck.json" --merge
 ```
 
 `--venue` accepts the same comma list / `all` as the fetch step. Each venue is checked
@@ -145,7 +166,7 @@ venue's coverage as resting on fewer legs, not as broken.
 "rollup": {...}}` — per venue, per source: how many papers it found, how many of
 those Semantic Scholar also had (`coverage`), and the full list of papers it found
 that S2 **missed**; `rollup` gives the same numbers summed across venues, per source.
-With `--merge`, those missing papers are appended to `candidates.json` with
+With `--merge`, those missing papers are appended to `$WORKSPACE/candidates.json` with
 `venue_key` set and `scores`/`reasons`/`keyword_hits` `null`/empty for **every**
 topic, so they flow into your scoring step like any other candidate, and
 `meta.crosschecked_sources` records which sources were consulted (this surfaces on
@@ -170,7 +191,7 @@ list will be huge and mostly irrelevant. Either skip this step, or run it withou
 
 ### 3. Score every candidate for every topic — THIS IS YOUR CORE JOB
 
-Read `candidates.json`. For **each** candidate, read its `title`, `abstract`, and
+Read `$WORKSPACE/candidates.json`. For **each** candidate, read its `title`, `abstract`, and
 `tldr` **once**, and in that same pass assign a `score` in `[0, 1]` plus a one-line
 `reason` **for every topic**, filling `scores[topic]` / `reasons[topic]`.
 
@@ -218,7 +239,8 @@ Guidelines:
 
 Write the scores back into the **same JSON structure** (keep every field; just fill
 `scores[topic]` and `reasons[topic]` for every topic on every candidate). Save it
-(e.g. `candidates.scored.json`). For large candidate sets, process in batches but make
+into the workspace (e.g. `$WORKSPACE/candidates.scored.json`). For large candidate
+sets, process in batches but make
 sure **every** candidate ends up with a numeric score for **every** topic — any left
 as `null` will render as an empty cell (correct for "never scored against this
 topic"), but a candidate you forgot to score at all will be silently dropped from the
@@ -228,8 +250,8 @@ Papers sheet entirely.
 
 ```bash
 python3 scripts/build_ods.py \
-  --in candidates.scored.json \
-  --out results.ods \
+  --in "$WORKSPACE/candidates.scored.json" \
+  --out "$WORKSPACE/results.ods" \
   --threshold 0.3
 ```
 
@@ -239,8 +261,8 @@ workbook, joined by `paper_id`, with no re-scoring:
 
 ```bash
 python3 scripts/build_ods.py \
-  --in candidates.scored.llm.json --in candidates.scored.cim.json \
-  --out results.ods
+  --in "$WORKSPACE/candidates.scored.llm.json" --in "$WORKSPACE/candidates.scored.cim.json" \
+  --out "$WORKSPACE/results.ods"
 ```
 
 A paper missing a score for one of the merged-in topics gets an **empty** cell there,
@@ -291,7 +313,8 @@ reason the export is worth keeping rather than re-running.
 ### 5. Report
 
 Tell the user, **per venue and per topic**: how many candidates were fetched, how many
-survived the threshold, where `results.ods` is, and a couple of highlights (the clear
+survived the threshold, where `$WORKSPACE/results.ods` is (give the actual resolved
+path, e.g. `workspace/20260904_a3f9c21b/results.ods`), and a couple of highlights (the clear
 1.0s and any interesting partial-match finds per theme).
 
 Also report, honestly:

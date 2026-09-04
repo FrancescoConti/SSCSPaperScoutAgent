@@ -2,6 +2,7 @@
 .env
 
 # Generated pipeline artifacts
+workspace/
 *.ods
 candidates*.json
 !scripts/venues.json

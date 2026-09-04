@@ -683,12 +683,19 @@ def merge_payloads(datas):
                     "venue_key": c.get("venue_key", ""),
                     "sources": c.get("sources", []),
                     "abstract": c.get("abstract", ""),
+                    "doi": c.get("doi", ""),
+                    "link": c.get("link", ""),
                     "scores": {},
                     "reasons": {},
                 }
                 candidates[pid] = merged
-            elif not merged.get("abstract") and c.get("abstract"):
-                merged["abstract"] = c["abstract"]
+            else:
+                if not merged.get("abstract") and c.get("abstract"):
+                    merged["abstract"] = c["abstract"]
+                if not merged.get("doi") and c.get("doi"):
+                    merged["doi"] = c["doi"]
+                if not merged.get("link") and c.get("link"):
+                    merged["link"] = c["link"]
 
             cscores = c.get("scores") or {}
             creasons = c.get("reasons") or {}
